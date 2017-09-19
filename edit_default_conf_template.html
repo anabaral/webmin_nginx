@@ -1,0 +1,254 @@
+<style type="text/css">
+table.grid7{
+	border-collapse:collapse;
+}
+table.grid7 td{
+	border: 1px solid black;
+}
+table.grid7 thead td{
+	background-color: #fdc;
+}
+table.grid7 tbody td input{
+	width:100%;
+}
+input.oper_btn {
+	background-color: #eef;
+}
+</style>
+<script type="text/javascript">
+/* jquery-3.x.x.js 를 bundle.min.js 라는 이름으로 이미 포함하고 있어 별도 추가 불필요. */
+var content;
+var backsrv_s_idx;
+var backsrv_e_idx;
+var servername_s_idx;
+var servername_e_idx;
+var port_s_idx;
+var port_e_idx;
+var infos = [];
+$("body").ready(function(){
+	content = document.getElementById("original").value;
+
+	var startServerKey = /^\s*server\s*\{$/mg;
+	var endServerKey = /^\}$/mg;
+	if (startServerKey.test(content)){
+		server_s_idx = startServerKey.lastIndex;
+		if (endServerKey.test(content.substring(server_s_idx))){
+			server_e_idx = server_s_idx + endServerKey.lastIndex - 1;
+			var serverPart = content.substring(server_s_idx, server_e_idx);
+			var found;
+			
+			var listenPortKey = /^\s*listen\s+[0-9]+\s*;.*$/mg;
+			if ((found = listenPortKey.exec(serverPart))){
+				port_s_idx = server_s_idx + found.index;
+				port_e_idx = server_s_idx + listenPortKey.lastIndex;
+				var listenPort = found.toString().replace(/\s*listen\s+/, "").replace(/\s*;/, "");
+				$("#listen_port").val(listenPort);
+			}
+			
+			var serverNameKey = /^\s*server_name\s+[a-zA-Z0-9_]+\s*;.*$/mg;
+			if ((found = serverNameKey.exec(serverPart))){
+				servername_s_idx = server_s_idx + found.index;
+				servername_e_idx = server_s_idx + serverNameKey.lastIndex;
+				var serverName = found.toString().replace(/\s*server_name\s+/, "").replace(/\s*;/, "");
+				$("#server_name").val(serverName);
+			}
+			
+		}
+	}
+
+	var startBackSrvKey = /^upstream backend \{$/mg;
+	var endBackSrvKey = /^\}$/mg;
+	if (startBackSrvKey.test(content)){
+		backsrv_s_idx = startBackSrvKey.lastIndex;
+		if (endBackSrvKey.test(content.substring(backsrv_s_idx))){
+			backsrv_e_idx = backsrv_s_idx + endBackSrvKey.lastIndex - 1;
+			var backSrvPart = content.substring(backsrv_s_idx, backsrv_e_idx);
+			
+			var balance;
+			if (/^\s*ip_hash\s*;/mg.test(backSrvPart)){
+				balance="ip_hash";
+			}else if (/^\s*hash\s*;/mg.test(backSrvPart)){
+				balance="hash";
+			}else if (/^\s*least_conn\s*;/mg.test(backSrvPart)){
+				balance="least_conn";
+			}else if (/^\s*least_time\s*;/mg.test(backSrvPart)){
+				balance="least_time";
+			}else{
+				balance="";
+			}
+			$("#balance").val(balance);
+			
+			var serverKey = /server\s+[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}:[0-9]+\s*;/g;
+			var found;
+			while((found = serverKey.exec(backSrvPart))){
+				var ip_port = found.toString().replace(/server\s+/, "").replace(/\s*;$/, "").split(/:/);
+				var ip = ip_port[0];
+				var port = ip_port[1];
+				infos.push({"ip":ip, "port":port});
+			}
+		}else{
+			alert("Failed to parse config file: backend server config not ended right");
+			$("#apply-save").prop("disabled", true);
+		}
+	}else{
+		alert("Failed to parse config file: backend server config not found");
+		$("#apply-save").prop("disabled", true);
+	}
+	
+	if (infos.length > 0){
+		for(var i = 0; i < infos.length; i++){
+			addRow({ip : infos[i]["ip"], port : infos[i]["port"]});
+		}
+	}
+
+	$("#addrow").click(function(){
+		addRow({ip : "", port : ""})
+	});
+	
+	$("#apply").click(apply);
+	
+	$("#apply-save").click(function(){
+		apply();
+		save();
+	})
+});
+
+function addRow(valObj){
+	$("#servers").append("<tr>" 
+			+ "<td><input type='text' name='ip' value='" + valObj.ip + "'></td>" 
+			+ "<td><input type='text' name='port' value='" + valObj.port + "'></td>"
+			+ "<td><input type='button' onclick='delServer(this)' value='X'></td>"
+			+ "<td><input type='button' onclick='up(this)' value='▲'></td>"
+			+ "<td><input type='button' onclick='down(this)' value='▼'></td>"
+			+"</tr>"
+		);
+}
+
+function delServer(elt){
+	var trElt = elt.parentNode.parentNode;
+	var tbodyElt = trElt.parentNode;
+	trElt.remove(tbodyElt);
+}
+
+function up(elt){
+	var trJq = $(elt.parentNode.parentNode);
+	var prevJq = trJq.prev();
+	if (prevJq){
+		trJq.insertBefore(prevJq);
+	}
+}
+
+function down(elt){
+	var trJq = $(elt.parentNode.parentNode);
+	var nextJq = trJq.next();
+	if (nextJq){
+		trJq.insertAfter(nextJq);
+	}
+	
+}
+
+function apply(){
+	/*
+	 * backend server들 정보 -- 프론트 서버명 정보 -- 프론트 서버포트 정보 들이 순서대로 존재한다는 가정하에 파싱
+	 * 좀 체계적으로 템플릿 답게 하고 싶은데 쉽지 않네..
+	 */
+	var content_new = content.substring(0, backsrv_s_idx);
+	var content_2 = content.substring(backsrv_e_idx, port_s_idx);
+	var content_3 = content.substring(port_e_idx, servername_s_idx);
+	var content_4 = content.substring(servername_e_idx);
+	
+	if ($("#balance").val()){
+		content_new += "\n    " + $("#balance").val() + ";";
+	}
+	var server_trs = $("#servers tr");
+	for(var i = 0; i < server_trs.length; i++){
+		var ip = $(server_trs[i]).find("[name='ip']").val();
+		var port = $(server_trs[i]).find("[name='port']").val();
+		content_new += "\n    server " + ip + ":" + port + ";";
+	}
+	content_new += "\n";
+	content_new += content_2;
+	content_new += "\n    listen        " + $("#listen_port").val() + ";"
+	content_new += content_3;
+	content_new += "    server_name   " + $("#server_name").val() + ";"
+	content_new += content_4;
+	$("#directives").val(content_new);
+}
+
+function save(){
+	var frm = document.forms["save"];
+	frm.submit();
+}
+
+</script>
+<table class="grid7">
+	<thead>
+		<tr><td colspan="2" style="width:500px">Virtual Server Setting</td></tr>
+	</thead>
+	<tbody>
+		<tr><td style="width:220px">Server Name</td><td style="width:140px" ><input type="text" name="server_name" id="server_name" value=""></td></tr>
+		<tr><td style="width:220px">Listen Port</td><td style="width:600px" ><input type="text" name="listen_port" id="listen_port" value=""></td></tr>
+		<tr><td style="width:220px">Balance</td><td style="width:240px">
+			<select id="balance" name="balance">
+				<option value="">WRR (Weighted Round-Robin)</option>
+				<option value="least_conn">WRR with least conn</option>
+				<option value="least_time">WRR with least time</option>
+				<option value="hash">Hash</option>
+				<option value="ip_hash">IP Hash</option>
+			</select>
+		</td></tr>
+	</tbody>
+</table>
+
+<table class="grid7">
+	<thead>
+		<tr>
+			<td style="width:220px">SERVER IP</td><td style="width:80px">SERVER_PORT</td><td style="width:50px">삭제</td><td style="width:60px">위로▲</td><td style="width:60px">아래로▼</td>
+		</tr>
+	</thead>
+	<tbody id="servers">
+	</tbody>
+</table>
+<p>
+	<input id="addrow" type="button" class="oper_btn" value="add row" ></input>
+	<input id="apply-save" type="button" class="oper_btn" value="apply(save)" ></input>
+</p>
+<!-- 
+<textarea style="display:inline" name="original" id="original" rows="32" cols="80">
+upstream backend {
+    ip_hash;
+    server 10.178.29.35:80;
+    server 10.178.29.41:80;
+}
+
+server {
+    listen       80;
+    server_name  localhost;
+
+    #charset koi8-r;
+    #access_log  /var/log/nginx/host.access.log  main;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html index.htm;
+        proxy_pass http://backend;
+    }
+
+    #error_page  404              /404.html;
+
+    # redirect server error pages to the static page /50x.html
+    #
+    error_page   500 502 503 504  /50x.html;
+    location &#61; /50x.html {
+        root   /usr/share/nginx/html;
+}
+</textarea>
+ -->
+<form class="ui_form" name="save" role="form" action="edit_save.cgi" method="post" enctype="multipart/form-data" >
+<textarea style="display:none" name="original" id="original" rows="32" cols="80">
+#FILE_CONTENT#
+</textarea>
+<textarea style="display:none;background-color:#eef" name="directives" id="directives" rows="32" cols="80">
+</textarea>
+<input class='ui_hidden' type='hidden' name="editfile" id="editfile" value="${editfile}">
+</form>
